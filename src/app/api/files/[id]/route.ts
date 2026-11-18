@@ -10,7 +10,7 @@ type Params = { params: Promise<{ id: string }> }
 export async function GET(_req: Request, { params }: Params): Promise<Response> {
   try {
     const { id } = await params
-    const meta = getFile(getState().db, id)
+    const meta = await getFile((await getState()).db, id)
     if (!fs.existsSync(meta.file)) throw new DodoError('not_found', `file ${id} is missing`)
     const inline = isInlineImage(meta.mime)
     const ascii = meta.filename.replace(/[^\x20-\x7e]|["\\]/g, '_')
@@ -30,9 +30,9 @@ export async function GET(_req: Request, { params }: Params): Promise<Response> 
 
 export async function DELETE(_req: Request, { params }: Params): Promise<Response> {
   try {
-    const state = getState()
-    removeFile(state.db, (await params).id)
-    refresh(state)
+    const state = await getState()
+    await removeFile(state.db, (await params).id)
+    await refresh(state)
     return Response.json({ ok: true })
   } catch (err) {
     return errorResponse(err)

@@ -13,9 +13,9 @@ export async function POST(req: Request): Promise<Response> {
     }
     const file = (await req.formData().catch(() => null))?.get('file')
     if (!(file instanceof File)) throw new DodoError('usage', 'expected multipart form data with a "file" field')
-    const state = getState()
-    const meta = addFile(state.db, path, { filename: file.name, mime: file.type, data: new Uint8Array(await file.arrayBuffer()) })
-    refresh(state)
+    const state = await getState()
+    const meta = await addFile(state.db, path, { filename: file.name, mime: file.type, data: new Uint8Array(await file.arrayBuffer()) })
+    await refresh(state)
     return Response.json({ ...meta, markdown: fileMarkdown(meta) })
   } catch (err) {
     return errorResponse(err)
