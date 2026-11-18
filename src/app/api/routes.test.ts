@@ -42,3 +42,14 @@ test('a write from another process (the other slot) reaches the index', async ()
   await expect.poll(async () => (await (await get()).json()).docs.map((d: { path: string }) => d.path), { timeout: 2000 }).toEqual(['from-other-slot'])
   expect((await get()).headers.get('etag')).not.toBe(before)
 })
+test('a notify from another schema does not reload the index', async () => {
+  const state = await (globalThis.__dodo as Promise<import('@/server/state').State> | import('@/server/state').State)
+  const before = state.index
+  const other = connect(t.url, 'public')
+  await other`SELECT pg_notify('dodo_changed', 'some_other_schema')`
+  await new Promise((r) => setTimeout(r, 300))
+  expect(state.index).toBe(before)
+  await other`SELECT pg_notify('dodo_changed', ${t.schema})`
+  await expect.poll(() => state.index !== before, { timeout: 2000 }).toBe(true)
+  await other.end()
+})
