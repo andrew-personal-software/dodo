@@ -1,26 +1,21 @@
 #!/usr/bin/env bash
-# Replaces the local dev DB and files with a fresh snapshot of prod: pnpm db:pull
-# Prod is never written. The old local DB is kept as <db>.bak. Stop `pnpm dev` first.
+# Replaces the local dev schema and files with a fresh snapshot of prod: pnpm db:pull
+# Prod is never written. Needs the dev Postgres from `pnpm dev` (container dodo-dev-pg). Stop `pnpm dev` first.
 set -euo pipefail
 
 HOST=${DODO_HOST:-root@andrewsserver}
-DB=${DODO_DB:-$HOME/.dodo/dodo.db}
-FILES=${DODO_FILES:-$(dirname "$DB")/files}
+FILES=${DODO_FILES:-$HOME/.dodo/files}
+RT=$(command -v podman || command -v docker) || { echo "error: no podman or docker" >&2; exit 1; }
 
-die() { echo "error: $*" >&2; exit 1; }
+dump=$(mktemp)
+trap 'rm -f "$dump"' EXIT
+ssh "$HOST" 'podman exec postgres pg_dump -Fc -U postgres -d apps -n dodo' >"$dump"
+[[ -s $dump ]] || { echo "error: empty dump" >&2; exit 1; }
 
-if lsof "$DB" >/dev/null 2>&1; then die "$DB is open (pnpm dev?). Stop it first."; fi
-mkdir -p "$(dirname "$DB")" "$FILES"
+"$RT" exec dodo-dev-pg psql -q -U postgres -c 'CREATE EXTENSION IF NOT EXISTS pg_trgm' -c 'DROP SCHEMA IF EXISTS dodo CASCADE'
+"$RT" exec -i dodo-dev-pg pg_restore -U postgres -d postgres --no-owner --no-privileges -n dodo <"$dump"
+count=$("$RT" exec dodo-dev-pg psql -U postgres -tAc 'SELECT count(*) FROM dodo.docs WHERE deleted_at IS NULL')
 
-tmp=$DB.pull
-ssh "$HOST" 'f=$(mktemp) && sqlite3 /var/lib/dodo/dodo.db ".backup $f" && cat "$f"; rm -f "$f"' >"$tmp"
-[[ $(sqlite3 "$tmp" 'PRAGMA integrity_check') == ok ]] || { rm -f "$tmp"*; die "snapshot failed the integrity check"; }
-count=$(sqlite3 "$tmp" 'SELECT count(*) FROM docs WHERE deleted_at IS NULL')
-rm -f "$tmp-wal" "$tmp-shm"
-
-if [[ -e $DB ]]; then sqlite3 "$DB" ".backup '$DB.bak'"; fi
-rm -f "$DB" "$DB-wal" "$DB-shm"
-mv "$tmp" "$DB"
+mkdir -p "$FILES"
 rsync -a --delete "$HOST:/var/lib/dodo/files/" "$FILES/"
-
-echo "pulled $count docs into $DB"
+echo "pulled $count docs into schema dodo"

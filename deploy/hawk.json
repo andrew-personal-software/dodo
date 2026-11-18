@@ -1,0 +1,7 @@
+{
+  "web": { "command": ["node", "node_modules/next/dist/bin/next", "start", "-H", "0.0.0.0", "-p", "3000"] },
+  "migrate": ["node", "dist/migrate.js"],
+  "jobs": { "cleanup": { "command": ["node", "dist/cleanup.js"], "schedule": "*-*-* 03:30:00" } },
+  "env": { "NODE_ENV": "production", "DODO_FILES": "/data/files" },
+  "tmpfs": ["/app/.next/cache"]
+}

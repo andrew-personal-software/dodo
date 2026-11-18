@@ -3,7 +3,7 @@ export const AGENTS_MD = `# AGENTS.md
 ## Docs live in dodo
 
 \`dodo\` is a store of markdown docs: how projects are set up, deployed and run.
-Docs live on a dodo server (SQLite behind a Next.js app); the \`dodo\` CLI talks
+Docs live on a dodo server (Postgres behind a Next.js app); the \`dodo\` CLI talks
 to it over HTTP. Read dodo before you copy a pattern from another repo, and
 write what you learn back to it.
 

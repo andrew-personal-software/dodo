@@ -1,0 +1,12 @@
+.git
+.github
+.next
+.superpowers
+.playwright-mcp
+.kb
+.env
+node_modules
+dist
+docs
+*.tsbuildinfo
+*.db
