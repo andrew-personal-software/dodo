@@ -64,3 +64,23 @@ test('a write sends one notify on dodo_changed', async () => {
   await l.unlisten()
   await other.end()
 })
+test('two writes with the same base from two slots: one wins, the other conflicts', async () => {
+  const other = connect(t.url, t.schema)
+  for (let i = 0; i < 20; i++) {
+    const { doc } = await createDoc(db, { path: `a${i}`, body: 'one' })
+    const r = await Promise.allSettled([
+      writeDoc(db, `a${i}`, { body: 'from blue', baseHash: doc.bodyHash }),
+      writeDoc(other, `a${i}`, { body: 'from green', baseHash: doc.bodyHash }),
+    ])
+    expect(r.map((x) => x.status).sort()).toEqual(['fulfilled', 'rejected'])
+  }
+  await other.end()
+})
+test('two creates of one path at once: one conflict, no 500', async () => {
+  const other = connect(t.url, t.schema)
+  for (let i = 0; i < 20; i++) {
+    const r = await Promise.allSettled([createDoc(db, { path: `n${i}`, body: '' }), createDoc(other, { path: `n${i}`, body: '' })])
+    expect(r.filter((x) => x.status === 'rejected').map((x) => String((x as PromiseRejectedResult).reason))).toEqual([expect.stringMatching(/already exists/)])
+  }
+  await other.end()
+})

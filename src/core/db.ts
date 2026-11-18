@@ -59,9 +59,14 @@ export async function migrate(db: postgres.Sql): Promise<{ from: number; to: num
   })
 }
 
+// Writes run one at a time across every process (both deploy slots), so a check-then-write
+// (baseHash, a free path) cannot interleave with another write. dodo's write rate is low.
 export async function tx<T>(db: Db, fn: (t: postgres.TransactionSql) => Promise<T>): Promise<T> {
   if ('savepoint' in db) return fn(db)
-  return (await (db as postgres.Sql).begin(fn)) as T
+  return (await (db as postgres.Sql).begin(async (t) => {
+    await t`SELECT pg_advisory_xact_lock(hashtext('dodo-write'))`
+    return fn(t)
+  })) as T
 }
 
 // Tells every server process (both deploy slots) to reload its index. Sent on commit.
