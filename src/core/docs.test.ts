@@ -59,8 +59,12 @@ test('a write sends one notify on dodo_changed', async () => {
   const other = connect(t.url, t.schema)
   const got: string[] = []
   const l = await other.listen(CHANNEL, (p) => got.push(p))
+  // Other test files write in their own schemas at the same time; NOTIFY is database-wide.
+  const noise = connect(t.url, 'public')
+  await noise`SELECT pg_notify(${CHANNEL}, 'some_other_schema')`
   await createDoc(db, { path: 'a', body: '' })
-  await expect.poll(() => got.length, { timeout: 2000 }).toBe(1)
+  await expect.poll(() => got.filter((p) => p === t.schema).length, { timeout: 2000 }).toBe(1)
+  await noise.end()
   await l.unlisten()
   await other.end()
 })

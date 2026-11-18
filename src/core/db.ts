@@ -70,6 +70,7 @@ export async function tx<T>(db: Db, fn: (t: postgres.TransactionSql) => Promise<
 }
 
 // Tells every server process (both deploy slots) to reload its index. Sent on commit.
+// The payload is the schema; NOTIFY reaches every listener in the database.
 export async function changed(t: Db): Promise<void> {
-  await t`SELECT pg_notify(${CHANNEL}, '')`
+  await t`SELECT pg_notify(${CHANNEL}, current_schema())`
 }
