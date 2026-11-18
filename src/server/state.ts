@@ -27,8 +27,10 @@ export function refresh(state: State): Promise<void> {
 export async function startState(db: postgres.Sql): Promise<State> {
   const state: State = { db, index: { docs: [] }, rev: '' }
   await refresh(state)
+  const [{ schema }] = await db<{ schema: string }[]>`SELECT current_schema() AS schema`
   const reload = () => void refresh(state).catch((err) => console.error(`dodo: reload failed: ${err instanceof Error ? err.message : err}`))
-  await db.listen(CHANNEL, reload, reload)
+  // NOTIFY is database-wide; the payload names the schema that changed.
+  await db.listen(CHANNEL, (payload) => { if (payload === schema) reload() }, reload)
   return state
 }
 
