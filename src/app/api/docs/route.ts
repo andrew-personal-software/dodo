@@ -7,7 +7,7 @@ export const dynamic = 'force-dynamic'
 
 export async function GET(req: Request): Promise<Response> {
   try {
-    const state = getState()
+    const state = await getState()
     const etag = `"${state.rev}"`
     if (req.headers.get('if-none-match') === etag) return new Response(null, { status: 304, headers: { ETag: etag } })
     const headers: Record<string, string> = { 'Content-Type': 'application/json', ETag: etag, Vary: 'Accept-Encoding' }
@@ -25,12 +25,12 @@ export async function GET(req: Request): Promise<Response> {
 
 export async function POST(req: Request): Promise<Response> {
   try {
-    const state = getState()
-    const result = createDoc(
+    const state = await getState()
+    const result = await createDoc(
       state.db,
       await jsonBody(req, { path: 'string', body: 'string', projects: 'string[]?', clientId: 'string?', onConflict: 'string?' }),
     )
-    refresh(state)
+    await refresh(state)
     return Response.json(result)
   } catch (err) {
     return errorResponse(err)

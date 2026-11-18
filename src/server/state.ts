@@ -1,25 +1,43 @@
-import { DodoError, hash, loadIndex, openDb } from '@/core'
-import type { Db, DocIndex, ErrorCode } from '@/core'
+import type postgres from 'postgres'
+import { CHANNEL, connect, hash, loadIndex } from '@/core'
+import { DodoError } from '@/core'
+import type { DocIndex, ErrorCode } from '@/core'
 
-export type State = { db: Db; index: DocIndex; rev: string }
+export type State = { db: postgres.Sql; index: DocIndex; rev: string }
 
 declare global {
   // eslint-disable-next-line no-var
-  var __dodo: State | undefined
+  var __dodo: State | Promise<State> | undefined
 }
 
-export function getState(): State {
-  if (!globalThis.__dodo) {
-    const db = openDb()
-    const index = loadIndex(db)
-    globalThis.__dodo = { db, index, rev: hash(JSON.stringify(index)) }
-  }
-  return globalThis.__dodo
+const loads = new WeakMap<State, Promise<void>>()
+
+// Loads run one at a time, so an older load never overwrites a newer index.
+export function refresh(state: State): Promise<void> {
+  const next = (loads.get(state) ?? Promise.resolve()).catch(() => {}).then(async () => {
+    state.index = await loadIndex(state.db)
+    state.rev = hash(JSON.stringify(state.index))
+  })
+  loads.set(state, next)
+  return next
 }
 
-export function refresh(state: State): void {
-  state.index = loadIndex(state.db)
-  state.rev = hash(JSON.stringify(state.index))
+// Loads the index, then reloads it on every dodo_changed NOTIFY: writes from the other deploy slot,
+// and after a reconnect (onlisten), anything missed while the connection was down.
+export async function startState(db: postgres.Sql): Promise<State> {
+  const state: State = { db, index: { docs: [] }, rev: '' }
+  await refresh(state)
+  const reload = () => void refresh(state).catch((err) => console.error(`dodo: reload failed: ${err instanceof Error ? err.message : err}`))
+  await db.listen(CHANNEL, reload, reload)
+  return state
+}
+
+export function getState(): Promise<State> {
+  globalThis.__dodo ??= startState(connect()).catch((err) => {
+    globalThis.__dodo = undefined
+    throw err
+  })
+  return Promise.resolve(globalThis.__dodo)
 }
 
 const STATUS: Record<ErrorCode, number> = { usage: 400, not_found: 404, conflict: 409, invalid: 422, version: 426, unavailable: 503 }

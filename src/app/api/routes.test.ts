@@ -1,13 +1,19 @@
-import { mkdtempSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import path from 'node:path'
-import { beforeEach, expect, test } from 'vitest'
+import { afterEach, beforeEach, expect, test } from 'vitest'
+import { connect } from '@/core/db'
+import { createDoc } from '@/core/docs'
+import { testDb } from '@/core/testdb'
+import { startState } from '@/server/state'
 import { PUT as putDoc } from './doc/route'
-import { POST as postDocs } from './docs/route'
+import { GET as getDocs, POST as postDocs } from './docs/route'
 
-beforeEach(() => {
-  process.env.DODO_DB = path.join(mkdtempSync(path.join(tmpdir(), 'dodo-api-')), 'x.db')
+let t: Awaited<ReturnType<typeof testDb>>
+beforeEach(async () => {
+  t = await testDb()
+  globalThis.__dodo = await startState(t.db)
+})
+afterEach(async () => {
   globalThis.__dodo = undefined
+  await t.drop()
 })
 
 const jsonReq = (body: unknown, method = 'POST', query = '') =>
@@ -26,4 +32,13 @@ test('bad JSON shapes are 400', async () => {
   expect((await postDocs(bad)).status).toBe(400)
   expect((await postDocs(jsonReq({ path: 'a', body: 'x', projects: 'SPAR' }))).status).toBe(400)
   expect((await putDoc(jsonReq({ body: 1 }, 'PUT', '?path=a'))).status).toBe(400)
+})
+test('a write from another process (the other slot) reaches the index', async () => {
+  const get = () => getDocs(new Request('http://x/api/docs'))
+  const before = (await get()).headers.get('etag')
+  const other = connect(t.url, t.schema)
+  await createDoc(other, { path: 'from-other-slot', body: '' })
+  await other.end()
+  await expect.poll(async () => (await (await get()).json()).docs.map((d: { path: string }) => d.path), { timeout: 2000 }).toEqual(['from-other-slot'])
+  expect((await get()).headers.get('etag')).not.toBe(before)
 })

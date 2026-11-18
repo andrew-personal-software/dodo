@@ -8,19 +8,27 @@ permissions:
   contents: read
 
 jobs:
+  # Conventional-commit title, and the task key at its end (if any) must exist in sparrow.
   title:
-    runs-on: ubuntu-latest
-    steps:
-      - env:
-          TITLE: ${{ github.event.pull_request.title }}
-        run: |
-          echo "$TITLE" | grep -Eq '^(feat|fix|perf|refactor|docs|test|build|ci|chore|style|revert)(\([a-z0-9-]+\))?!?: .+' \
-            || { echo "PR title is not a conventional commit: $TITLE"; exit 1; }
+    uses: andrew-personal-software/hawk/.github/workflows/pr-title.yml@main
 
   test:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: dev
+        ports:
+          - 55432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 20
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup
+      - run: psql postgres://postgres:dev@127.0.0.1:55432/postgres -c 'CREATE EXTENSION IF NOT EXISTS pg_trgm'
       - run: pnpm typecheck
       - run: pnpm test

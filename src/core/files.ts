@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto'
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
-import { dbPath, tx } from './db'
+import { changed, tx } from './db'
 import type { Db } from './db'
 import { now, readDoc } from './docs'
 import { DodoError } from './errors'
@@ -11,7 +12,7 @@ import type { FileMeta } from './types'
 export { MAX_FILE_BYTES }
 
 export function filesDir(): string {
-  return process.env.DODO_FILES ?? path.join(path.dirname(dbPath()), 'files')
+  return process.env.DODO_FILES ?? path.join(os.homedir(), '.dodo', 'files')
 }
 
 // Display name only; the file on disk is always named by its uuid.
@@ -31,12 +32,11 @@ const toMeta = (r: Record<string, unknown>): FileMeta => ({
 })
 
 // Files of live docs, grouped by doc row id. Pass docId to load one doc's files.
-export function loadFiles(db: Db, docId?: number): Map<number, FileMeta[]> {
-  const rows = db
-    .prepare(
-      `SELECT f.* FROM files f JOIN docs d ON d.id = f.doc_id WHERE d.deleted_at IS NULL ${docId === undefined ? '' : 'AND d.id = ?'} ORDER BY f.created, f.rowid`,
-    )
-    .all(...(docId === undefined ? [] : [docId])) as Record<string, unknown>[]
+export async function loadFiles(db: Db, docId?: number): Promise<Map<number, FileMeta[]>> {
+  const rows = await db.unsafe<Record<string, unknown>[]>(
+    `SELECT f.* FROM files f JOIN docs d ON d.id = f.doc_id WHERE d.deleted_at IS NULL ${docId === undefined ? '' : 'AND d.id = $1'} ORDER BY f.created, f.seq`,
+    docId === undefined ? [] : [docId],
+  )
   const out = new Map<number, FileMeta[]>()
   for (const r of rows) {
     const id = Number(r.doc_id)
@@ -46,42 +46,36 @@ export function loadFiles(db: Db, docId?: number): Map<number, FileMeta[]> {
   return out
 }
 
-function docRowId(db: Db, docPath: string): number {
-  const p = readDoc(db, docPath).path
-  return (db.prepare('SELECT id FROM docs WHERE path = ? AND deleted_at IS NULL').get(p) as { id: number }).id
+async function docRowId(db: Db, docPath: string): Promise<number> {
+  const p = (await readDoc(db, docPath)).path
+  const [row] = await db<{ id: number }[]>`SELECT id FROM docs WHERE path = ${p} AND deleted_at IS NULL`
+  return row.id
 }
 
-export function addFile(
+export async function addFile(
   db: Db,
   docPath: string,
   file: { filename: string; mime?: string; data: Uint8Array },
   dir = filesDir(),
-): FileMeta {
-  const docId = docRowId(db, docPath)
+): Promise<FileMeta> {
+  const docId = await docRowId(db, docPath)
   if (file.data.byteLength > MAX_FILE_BYTES) throw new DodoError('invalid', 'file exceeds 25 MB')
   const filename = cleanName(file.filename)
   const mime = file.mime && MIME_RE.test(file.mime) ? file.mime.toLowerCase() : mimeFor(filename)
   const meta: FileMeta = { id: randomUUID(), filename, mime, size: file.data.byteLength, created: now() }
   fs.mkdirSync(dir, { recursive: true })
   fs.writeFileSync(path.join(dir, meta.id), file.data, { flag: 'wx' })
-  tx(db, () => {
-    db.prepare('INSERT INTO files (id, doc_id, filename, mime, size, created) VALUES (?, ?, ?, ?, ?, ?)').run(
-      meta.id,
-      docId,
-      meta.filename,
-      meta.mime,
-      meta.size,
-      meta.created,
-    )
-    db.prepare('UPDATE docs SET updated = ? WHERE id = ?').run(meta.created, docId)
+  await tx(db, async (t) => {
+    await t`INSERT INTO files (id, doc_id, filename, mime, size, created)
+      VALUES (${meta.id}, ${docId}, ${meta.filename}, ${meta.mime}, ${meta.size}, ${meta.created})`
+    await t`UPDATE docs SET updated = ${meta.created} WHERE id = ${docId}`
+    await changed(t)
   })
   return meta
 }
 
-export function getFile(db: Db, id: string, dir = filesDir()): FileMeta & { file: string } {
-  const row = db.prepare('SELECT f.* FROM files f JOIN docs d ON d.id = f.doc_id WHERE f.id = ? AND d.deleted_at IS NULL').get(id) as
-    | Record<string, unknown>
-    | undefined
+export async function getFile(db: Db, id: string, dir = filesDir()): Promise<FileMeta & { file: string }> {
+  const [row] = await db<Record<string, unknown>[]>`SELECT f.* FROM files f JOIN docs d ON d.id = f.doc_id WHERE f.id = ${id} AND d.deleted_at IS NULL`
   if (!row) throw new DodoError('not_found', `file ${id} not found`)
   const meta = toMeta(row)
   return { ...meta, file: path.join(dir, meta.id) }
@@ -89,12 +83,13 @@ export function getFile(db: Db, id: string, dir = filesDir()): FileMeta & { file
 
 // Deletes the row only; the file stays on disk for the cleanup job. Touching the file restarts
 // its 7-day clock, so backups taken before the removal can still be restored.
-export function removeFile(db: Db, id: string, dir = filesDir()): void {
-  tx(db, () => {
-    const row = db.prepare('SELECT doc_id FROM files WHERE id = ?').get(id) as { doc_id: number } | undefined
+export async function removeFile(db: Db, id: string, dir = filesDir()): Promise<void> {
+  await tx(db, async (t) => {
+    const [row] = await t<{ doc_id: number }[]>`SELECT doc_id FROM files WHERE id = ${id}`
     if (!row) throw new DodoError('not_found', `file ${id} not found`)
-    db.prepare('DELETE FROM files WHERE id = ?').run(id)
-    db.prepare('UPDATE docs SET updated = ? WHERE id = ?').run(now(), row.doc_id)
+    await t`DELETE FROM files WHERE id = ${id}`
+    await t`UPDATE docs SET updated = ${now()} WHERE id = ${row.doc_id}`
+    await changed(t)
   })
   const file = path.join(dir, id)
   if (fs.existsSync(file)) fs.utimesSync(file, new Date(), new Date())
