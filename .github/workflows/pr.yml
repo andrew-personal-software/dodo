@@ -28,6 +28,8 @@ jobs:
           --health-retries 20
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - uses: ./.github/actions/setup
       - run: psql postgres://postgres:dev@127.0.0.1:55432/postgres -c 'CREATE EXTENSION IF NOT EXISTS pg_trgm'
       - run: pnpm typecheck
